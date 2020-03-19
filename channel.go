@@ -1,8 +1,9 @@
-package pool
+package poolx
 
 import (
 	"errors"
 	"fmt"
+	"gitee.com/JMArch/micro/transport"
 	"sync"
 	"time"
 )
@@ -14,7 +15,7 @@ type Config struct {
 	//连接池中拥有的最大的连接数
 	MaxCap int
 	//生成连接的方法
-	Factory func() (interface{}, error)
+	Factory func(addr string, tr transport.Transport, opts ...transport.DialOption) (interface{}, error)
 	//关闭连接的方法
 	Close func(interface{}) error
 	//检查连接是否有效的方法
@@ -27,10 +28,11 @@ type Config struct {
 type channelPool struct {
 	mu          sync.Mutex
 	conns       chan *idleConn
-	factory     func() (interface{}, error)
+	factory     func(addr string, tr transport.Transport, opts ...transport.DialOption) (interface{}, error)
 	close       func(interface{}) error
 	ping        func(interface{}) error
 	idleTimeout time.Duration
+	MaxCap      int
 }
 
 type idleConn struct {
@@ -55,20 +57,21 @@ func NewChannelPool(poolConfig *Config) (Pool, error) {
 		factory:     poolConfig.Factory,
 		close:       poolConfig.Close,
 		idleTimeout: poolConfig.IdleTimeout,
+		MaxCap:      poolConfig.MaxCap,
 	}
 
 	if poolConfig.Ping != nil {
 		c.ping = poolConfig.Ping
 	}
 
-	for i := 0; i < poolConfig.InitialCap; i++ {
-		conn, err := c.factory()
-		if err != nil {
-			c.Release()
-			return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
-		}
-		c.conns <- &idleConn{conn: conn, t: time.Now()}
-	}
+	//for i := 0; i < poolConfig.InitialCap; i++ {
+	//	conn, err := c.factory()
+	//	if err != nil {
+	//		c.Release()
+	//		return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
+	//	}
+	//	c.conns <- &idleConn{conn: conn, t: time.Now()}
+	//}
 
 	return c, nil
 }
@@ -82,7 +85,7 @@ func (c *channelPool) getConns() chan *idleConn {
 }
 
 // Get 从pool中取一个连接
-func (c *channelPool) Get() (interface{}, error) {
+func (c *channelPool) Get(addr string, tr transport.Transport, opts ...transport.DialOption) (interface{}, error) {
 	conns := c.getConns()
 	if conns == nil {
 		return nil, ErrClosed
@@ -110,13 +113,17 @@ func (c *channelPool) Get() (interface{}, error) {
 			}
 			return wrapConn.conn, nil
 		default:
-			c.mu.Lock()
+			//c.mu.Lock()
 			if c.factory == nil {
 				c.mu.Unlock()
 				continue
 			}
-			conn, err := c.factory()
-			c.mu.Unlock()
+			if c.Len() >= c.MaxCap {
+				fmt.Printf("超出最大限制: %d, 拒绝新建连接\n", c.MaxCap)
+				return nil, errors.New(fmt.Sprintf("超出最大限制: %d, 拒绝新建连接\n", c.MaxCap))
+			}
+			conn, err := c.factory(addr, tr, opts...)
+			//c.mu.Unlock()
 			if err != nil {
 				return nil, err
 			}
@@ -146,6 +153,7 @@ func (c *channelPool) Put(conn interface{}) error {
 	default:
 		c.mu.Unlock()
 		//连接池已满，直接关闭该连接
+		fmt.Printf("放入连接池，但连接池已满")
 		return c.Close(conn)
 	}
 }

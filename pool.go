@@ -1,6 +1,9 @@
-package pool
+package poolx
 
-import "errors"
+import (
+	"errors"
+	"gitee.com/JMArch/micro/transport"
+)
 
 var (
 	//ErrClosed 连接池已经关闭Error
@@ -9,7 +12,7 @@ var (
 
 // Pool 基本方法
 type Pool interface {
-	Get() (interface{}, error)
+	Get(addr string, tr transport.Transport, opts ...transport.DialOption) (interface{}, error)
 
 	Put(interface{}) error
 
